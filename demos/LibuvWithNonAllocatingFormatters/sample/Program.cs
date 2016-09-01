@@ -7,25 +7,28 @@ using System.Threading.Tasks;
 
 static class Program
 {
-    static string s_ipAddress;
-    static int s_port;
+    static string s_ipAddress = "0.0.0.0";
+    static int s_port = 5000;
 
     public static void Main(string[] args)
     {
-        if(args.Length < 1 || args[0].Substring(0, 4) != "/ip:")
+        if (args.Length >= 1)
         {
-            Usage();
-            return;
-        }
+            if (args[0].Substring(0, 4) != "/ip:")
+            {
+                Usage();
+                return;
+            }
 
-        var options = args[0].Substring(4).Split(':');
-        if(options.Length!=2)
-        {
-            Usage();
-            return;
+            var options = args[0].Substring(4).Split(':');
+            if (options.Length != 2)
+            {
+                Usage();
+                return;
+            }
+            s_ipAddress = options[0];
+            s_port = Int32.Parse(options[1]);
         }
-        s_ipAddress = options[0];
-        s_port = Int32.Parse(options[1]);
 
         Console.WriteLine("browse to http://{0}:{1}", s_ipAddress, s_port);
 
