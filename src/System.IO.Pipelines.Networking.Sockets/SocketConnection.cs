@@ -22,16 +22,18 @@ namespace System.IO.Pipelines.Networking.Sockets
 
         private static readonly Queue<SocketAsyncEventArgs> _argsPool = new Queue<SocketAsyncEventArgs>();
 
+#if false
         private static readonly MicroBufferPool _smallBuffers;
 
         internal static int SmallBuffersInUse = _smallBuffers?.InUse ?? 0;
 
         const int SmallBufferSize = 8;
+#endif
 
         // track the state of which strategy to use; need to use a known-safe
         // strategy until we can decide which to use (by observing behavior)
 //        private static BufferStyle _bufferStyle;
-        private static bool _seenReceiveZeroWithAvailable, _seenReceiveZeroWithEOF;
+//        private static bool _seenReceiveZeroWithAvailable, _seenReceiveZeroWithEOF;
 
         private static readonly byte[] _zeroLengthBuffer = new byte[0];
 
@@ -314,7 +316,7 @@ namespace System.IO.Pipelines.Networking.Sockets
                                 else
                                 {
                                     // socket reported EOF
-                                    RecycleSmallBuffer(ref initialSegment);
+//                                    RecycleSmallBuffer(ref initialSegment);
                                 }
                                 if (Socket.Available == 0)
                                 {
@@ -328,7 +330,8 @@ namespace System.IO.Pipelines.Networking.Sockets
                         // certainly want to coalesce the initial buffer (from the speculative receive) with the initial
                         // data, but we probably don't want to buffer indefinitely; for now, it will buffer up to 4 pages
                         // before flushing (entirely arbitrarily) - might want to make this configurable later
-                        buffer = _input.Writer.Alloc(SmallBufferSize * 2);
+//                        buffer = _input.Writer.Alloc(SmallBufferSize * 2);
+                        buffer = _input.Writer.Alloc(32);       // TODO: Not clear to me what to use here...
                         haveWriteBuffer = true;
 
                         const int FlushInputEveryBytes = 4 * MemoryPool.MaxPooledBlockLength;
@@ -341,7 +344,7 @@ namespace System.IO.Pipelines.Networking.Sockets
                                 buffer.Write(new Span<byte>(initialSegment.Array, initialSegment.Offset, bytesFromInitialDataBuffer));
                             }
                             // make the small buffer available to other consumers
-                            RecycleSmallBuffer(ref initialSegment);
+//                            RecycleSmallBuffer(ref initialSegment);
                         }
 
                         bool isEOF = false;
@@ -375,7 +378,7 @@ namespace System.IO.Pipelines.Networking.Sockets
                     }
                     finally
                     {
-                        RecycleSmallBuffer(ref initialSegment);
+ //                       RecycleSmallBuffer(ref initialSegment);
                         if (haveWriteBuffer)
                         {
                             _stopping = (await buffer.FlushAsync()).IsCompleted;
@@ -406,7 +409,7 @@ namespace System.IO.Pipelines.Networking.Sockets
             }
         }
 
-
+#if false
         private static ArraySegment<byte> LeaseSmallBuffer()
         {
             ArraySegment<byte> result;
@@ -425,6 +428,7 @@ namespace System.IO.Pipelines.Networking.Sockets
             }
             buffer = default(ArraySegment<byte>);
         }
+#endif
 
         private async Task ReadFromReaderAndWriteToSocketAsync()
         {
