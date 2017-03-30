@@ -278,113 +278,29 @@ namespace System.IO.Pipelines.Networking.Sockets
                 args = GetOrCreateSocketAsyncEventArgs();
                 while (!_stopping)
                 {
-                    bool haveWriteBuffer = false;
-                    WritableBuffer buffer = default(WritableBuffer);
-                    var initialSegment = default(ArraySegment<byte>);
+                    // Ensure we have some reasonable amount of buffer space
+                    WritableBuffer buffer = _input.Writer.Alloc(1024);
+                    SetBuffer(buffer.Buffer, args);
 
-                    try
+                    // await async for the io work to be completed
+                    await Socket.ReceiveSignalAsync(args);
+                    if (args.SocketError != SocketError.Success)
                     {
-
-                        int bytesFromInitialDataBuffer = 0;
-
-                        if (Socket.Available == 0)
-                        {
-                            // if we already have a buffer, use that (but: zero count); otherwise use a shared
-                            // zero-length; this avoids constantly changing the buffer that the args use, which
-                            // avoids some overheads
-                            args.SetBuffer(args.Buffer ?? _zeroLengthBuffer, 0, 0);
-
-                            // await async for the io work to be completed
-                            await Socket.ReceiveSignalAsync(args);
-
-                            if (args.SocketError != SocketError.Success)
-                            {
-                                throw new SocketException((int)args.SocketError);
-                            }
-
-                            // note we can't check BytesTransferred <= 0, as we always
-                            // expect 0; but if we returned, we expect data to be
-                            // buffered *on the socket*, else EOF
-                            if ((bytesFromInitialDataBuffer = args.BytesTransferred) <= 0)
-                            {
-                                if (ReferenceEquals(initialSegment.Array, _zeroLengthBuffer))
-                                {
-                                    // sentinel value that means we should just
-                                    // consume sync (we expect there to be data)
-                                    initialSegment = default(ArraySegment<byte>);
-                                }
-                                else
-                                {
-                                    // socket reported EOF
-//                                    RecycleSmallBuffer(ref initialSegment);
-                                }
-                                if (Socket.Available == 0)
-                                {
-                                    // yup, definitely an EOF
-                                    break;
-                                }
-                            }
-                        }
-
-                        // note that we will try to coalesce things here to reduce the number of flushes; we
-                        // certainly want to coalesce the initial buffer (from the speculative receive) with the initial
-                        // data, but we probably don't want to buffer indefinitely; for now, it will buffer up to 4 pages
-                        // before flushing (entirely arbitrarily) - might want to make this configurable later
-//                        buffer = _input.Writer.Alloc(SmallBufferSize * 2);
-                        buffer = _input.Writer.Alloc(32);       // TODO: Not clear to me what to use here...
-                        haveWriteBuffer = true;
-
-                        const int FlushInputEveryBytes = 4 * MemoryPool.MaxPooledBlockLength;
-
-                        if (initialSegment.Array != null)
-                        {
-                            // need to account for anything that we got in the speculative receive
-                            if (bytesFromInitialDataBuffer != 0)
-                            {
-                                buffer.Write(new Span<byte>(initialSegment.Array, initialSegment.Offset, bytesFromInitialDataBuffer));
-                            }
-                            // make the small buffer available to other consumers
-//                            RecycleSmallBuffer(ref initialSegment);
-                        }
-
-                        bool isEOF = false;
-                        while (Socket.Available != 0 && buffer.BytesWritten < FlushInputEveryBytes)
-                        {
-                            buffer.Ensure(); // ask for *something*, then use whatever is available (usually much much more)
-                            SetBuffer(buffer.Buffer, args);
-                            // await async for the io work to be completed
-                            await Socket.ReceiveSignalAsync(args);
-
-                            // either way, need to validate
-                            if (args.SocketError != SocketError.Success)
-                            {
-                                throw new SocketException((int)args.SocketError);
-                            }
-                            int len = args.BytesTransferred;
-                            if (len <= 0)
-                            {
-                                // socket reported EOF
-                                isEOF = true;
-                                break;
-                            }
-
-                            // record what data we filled into the buffer
-                            buffer.Advance(len);
-                        }
-                        if (isEOF)
-                        {
-                            break;
-                        }
+                        throw new SocketException((int)args.SocketError);
                     }
-                    finally
+
+                    int len = args.BytesTransferred;
+                    if (len == 0)
                     {
- //                       RecycleSmallBuffer(ref initialSegment);
-                        if (haveWriteBuffer)
-                        {
-                            _stopping = (await buffer.FlushAsync()).IsCompleted;
-                        }
+                        // socket reported EOF
+                        break;
                     }
+
+                    // record what data we filled into the buffer and push to pipe
+                    buffer.Advance(len);
+                    _stopping = (await buffer.FlushAsync()).IsCompleted;
                 }
+
                 _input.Writer.Complete();
             }
             catch (Exception ex)
