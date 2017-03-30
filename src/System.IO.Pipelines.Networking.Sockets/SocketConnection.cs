@@ -30,7 +30,7 @@ namespace System.IO.Pipelines.Networking.Sockets
 
         // track the state of which strategy to use; need to use a known-safe
         // strategy until we can decide which to use (by observing behavior)
-        private static BufferStyle _bufferStyle;
+//        private static BufferStyle _bufferStyle;
         private static bool _seenReceiveZeroWithAvailable, _seenReceiveZeroWithEOF;
 
         private static readonly byte[] _zeroLengthBuffer = new byte[0];
@@ -47,7 +47,7 @@ namespace System.IO.Pipelines.Networking.Sockets
 
         static SocketConnection()
         {
-
+#if false
             // validated styles for known OSes
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
@@ -71,6 +71,7 @@ namespace System.IO.Pipelines.Networking.Sockets
                 // we're going to need to use small buffers for awaiting input
                 _smallBuffers = new MicroBufferPool(SmallBufferSize, ushort.MaxValue);
             }
+#endif
         }
 
         internal SocketConnection(Socket socket, PipeFactory factory)
@@ -286,47 +287,14 @@ namespace System.IO.Pipelines.Networking.Sockets
 
                         if (Socket.Available == 0)
                         {
-                            // now, this gets a bit messy unfortunately, because support for the ideal option
-                            // (zero-length reads) is platform dependent
-                            switch (_bufferStyle)
-                            {
-                                case BufferStyle.Unknown:
-                                    try
-                                    {
-                                        initialSegment = await ReceiveInitialDataUnknownStrategyAsync(args);
-                                    }
-                                    catch
-                                    {
-                                        initialSegment = default(ArraySegment<byte>);
-                                    }
-                                    if (initialSegment.Array == null)
-                                    {
-                                        continue; // redo from start
-                                    }
-                                    break;
-                                case BufferStyle.UseZeroLengthBuffer:
-                                    // if we already have a buffer, use that (but: zero count); otherwise use a shared
-                                    // zero-length; this avoids constantly changing the buffer that the args use, which
-                                    // avoids some overheads
-                                    args.SetBuffer(args.Buffer ?? _zeroLengthBuffer, 0, 0);
+                            // if we already have a buffer, use that (but: zero count); otherwise use a shared
+                            // zero-length; this avoids constantly changing the buffer that the args use, which
+                            // avoids some overheads
+                            args.SetBuffer(args.Buffer ?? _zeroLengthBuffer, 0, 0);
 
-                                    // await async for the io work to be completed
-                                    await Socket.ReceiveSignalAsync(args);
-                                    break;
-                                case BufferStyle.UseSmallBuffer:
-                                    // We need  to do a speculative receive with a *cheap* buffer while we wait for input; it would be *nice* if
-                                    // we could do a zero-length receive, but this is not supported equally on all platforms (fine on Windows, but
-                                    // linux hates it). The key aim here is to make sure that we don't tie up an entire block from the memory pool
-                                    // waiting for input on a socket; fine for 1 socket, not so fine for 100,000 sockets
+                            // await async for the io work to be completed
+                            await Socket.ReceiveSignalAsync(args);
 
-                                    // do a short receive while we wait (async) for data
-                                    initialSegment = LeaseSmallBuffer();
-                                    args.SetBuffer(initialSegment.Array, initialSegment.Offset, initialSegment.Count);
-
-                                    // await async for the io work to be completed
-                                    await Socket.ReceiveSignalAsync(args);
-                                    break;
-                            }
                             if (args.SocketError != SocketError.Success)
                             {
                                 throw new SocketException((int)args.SocketError);
@@ -456,88 +424,6 @@ namespace System.IO.Pipelines.Networking.Sockets
                 _smallBuffers?.Recycle(buffer);
             }
             buffer = default(ArraySegment<byte>);
-        }
-
-        /// returns null if the caller should redo from start; returns
-        /// a non-null result to preocess the data
-        private async Task<ArraySegment<byte>> ReceiveInitialDataUnknownStrategyAsync(SocketAsyncEventArgs args)
-        {
-            // to prove that it works OK, we need (after a read):
-            // - have seen return 0 and Available > 0
-            // - have reen return <= 0 and Available == 0 and is true EOF
-            //
-            // if we've seen both, we can switch to the simpler approach;
-            // until then, if we just see return 0 and Available > 0, well...
-            // we're happy
-            //
-            // note: if we see return 0 and available == 0 and not EOF,
-            // then we know that zero-length receive is not supported
-
-            try
-            {
-                args.SetBuffer(_zeroLengthBuffer, 0, 0);
-                // we'll do a receive and see what happens
-                await Socket.ReceiveSignalAsync(args);
-            }
-            catch
-            {
-                // well, it didn't like that... switch to small buffers
-                _bufferStyle = BufferStyle.UseSmallBuffer;
-                return default(ArraySegment<byte>);
-            }
-            if (args.SocketError != SocketError.Success)
-            {   // let the calling code explode
-                return new ArraySegment<byte>(_zeroLengthBuffer);
-            }
-
-            if (Socket.Available > 0)
-            {
-                _seenReceiveZeroWithAvailable = true;
-                if (_seenReceiveZeroWithEOF)
-                {
-                    _bufferStyle = BufferStyle.UseZeroLengthBuffer;
-                }
-                // we'll let the calling method pull the data out
-                return new ArraySegment<byte>(_zeroLengthBuffer);
-            }
-
-            // so now we need to detect if this is a genuine EOF; if it isn't,
-            // that isn't conclusive, because could just be timing; but if it is: great
-            var buffer = LeaseSmallBuffer();
-            try
-            {
-                args.SetBuffer(buffer.Array, buffer.Offset, buffer.Count);
-                // we'll do a receive and see what happens
-                await Socket.ReceiveSignalAsync(args);
-
-                if (args.SocketError != SocketError.Success)
-                {   // we can't actually conclude  anything
-                    RecycleSmallBuffer(ref buffer);
-                    throw new SocketException((int)args.SocketError);
-                }
-                if (args.BytesTransferred <= 0)
-                {
-                    RecycleSmallBuffer(ref buffer);
-                    _seenReceiveZeroWithEOF = true;
-                    if (_seenReceiveZeroWithAvailable)
-                    {
-                        _bufferStyle = BufferStyle.UseZeroLengthBuffer;
-                    }
-                    // we'll let the calling method shut everything down
-                    return new ArraySegment<byte>(_zeroLengthBuffer);
-                }
-
-                // otherwise, we got something that looked like an EOF from receive,
-                // but which wasn't really; we'll have to do things the hard way :(
-                _bufferStyle = BufferStyle.UseSmallBuffer;
-                return buffer;
-            }
-            catch
-            {
-                // already recycled (or not) correctly in the success cases
-                RecycleSmallBuffer(ref buffer);
-                throw;
-            }
         }
 
         private async Task ReadFromReaderAndWriteToSocketAsync()
