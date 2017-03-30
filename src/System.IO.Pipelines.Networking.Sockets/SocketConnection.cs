@@ -280,25 +280,32 @@ namespace System.IO.Pipelines.Networking.Sockets
                 {
                     // Ensure we have some reasonable amount of buffer space
                     WritableBuffer buffer = _input.Writer.Alloc(1024);
-                    SetBuffer(buffer.Buffer, args);
 
-                    // await async for the io work to be completed
-                    await Socket.ReceiveSignalAsync(args);
-                    if (args.SocketError != SocketError.Success)
+                    try
                     {
-                        throw new SocketException((int)args.SocketError);
-                    }
+                        SetBuffer(buffer.Buffer, args);
 
-                    int len = args.BytesTransferred;
-                    if (len == 0)
+                        // await async for the io work to be completed
+                        await Socket.ReceiveSignalAsync(args);
+                        if (args.SocketError != SocketError.Success)
+                        {
+                            throw new SocketException((int)args.SocketError);
+                        }
+
+                        int len = args.BytesTransferred;
+                        if (len == 0)
+                        {
+                            // socket reported EOF
+                            break;
+                        }
+
+                        // record what data we filled into the buffer and push to pipe
+                        buffer.Advance(len);
+                    }
+                    finally
                     {
-                        // socket reported EOF
-                        break;
+                        _stopping = (await buffer.FlushAsync()).IsCompleted;
                     }
-
-                    // record what data we filled into the buffer and push to pipe
-                    buffer.Advance(len);
-                    _stopping = (await buffer.FlushAsync()).IsCompleted;
                 }
 
                 _input.Writer.Complete();
