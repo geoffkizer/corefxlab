@@ -87,6 +87,7 @@ namespace System.IO.Pipelines.Networking.Sockets
             }
             _factory = factory;
 
+#if false
             // TODO: Make this configurable
             // Dispatch to avoid deadlocks
             _input = PipeFactory.Create(new PipeOptions
@@ -99,6 +100,18 @@ namespace System.IO.Pipelines.Networking.Sockets
             {
                 ReaderScheduler = TaskRunScheduler.Default,
                 WriterScheduler = TaskRunScheduler.Default
+            });
+#endif
+            _input = PipeFactory.Create(new PipeOptions
+            {
+                ReaderScheduler = InlineScheduler.Default,
+                WriterScheduler = InlineScheduler.Default
+            });
+
+            _output = PipeFactory.Create(new PipeOptions
+            {
+                ReaderScheduler = InlineScheduler.Default,
+                WriterScheduler = InlineScheduler.Default
             });
 
             _receiveTask = ReceiveFromSocketAndPushToWriterAsync();
