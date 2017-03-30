@@ -294,6 +294,7 @@ namespace System.IO.Pipelines.Networking.Sockets
                     // Ensure we have some reasonable amount of buffer space
                     WritableBuffer buffer = _input.Writer.Alloc(1024);
 
+                    int len = 0;
                     try
                     {
                         SetBuffer(buffer.Buffer, args);
@@ -305,18 +306,17 @@ namespace System.IO.Pipelines.Networking.Sockets
                             throw new SocketException((int)args.SocketError);
                         }
 
-                        int len = args.BytesTransferred;
+                        len = args.BytesTransferred;
                         if (len == 0)
                         {
                             // socket reported EOF
                             break;
                         }
-
-                        // record what data we filled into the buffer and push to pipe
-                        buffer.Advance(len);
                     }
                     finally
                     {
+                        // record what data we filled into the buffer and push to pipe
+                        buffer.Advance(len);
                         _stopping = (await buffer.FlushAsync()).IsCompleted;
                     }
                 }
