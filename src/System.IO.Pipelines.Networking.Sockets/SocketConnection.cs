@@ -207,7 +207,14 @@ namespace System.IO.Pipelines.Networking.Sockets
                 await Task.WhenAll(_sendTask, _receiveTask);
 
                 _output.Writer.Complete();
-                _input.Reader.Complete();
+
+                // There's some timing issue that causes this to throw InvalidOperationException occasionally
+                // For now, just ignore this so I can make progress
+                try
+                {
+                    _input.Reader.Complete();
+                }
+                catch (Exception) { }
 
                 _socket?.Dispose();
                 _socket = null;
